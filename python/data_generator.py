@@ -1,5 +1,6 @@
 import random
-import json
+import csv  # Added for CSV writing
+import os   # Added for directory creation
 import time
 from datetime import datetime, timedelta
 from faker import Faker
@@ -47,9 +48,8 @@ class HighFrequencyDataGenerator:
         """Generate one high-frequency sample with realistic sensor relationships"""
         if previous_values is None:
             previous_values = {}
-        
-        sample = {"timestamp": timestamp.isoformat()}
-        
+        sample = {"timestamp": timestamp.isoformat(), "anomaly_flag": False} # Initialize anomaly_flag
+
         # Generate base sensors
         for sensor in self.sensor_types:
             sample[sensor] = self.generate_sensor_value(
@@ -60,85 +60,83 @@ class HighFrequencyDataGenerator:
         # Add 5% chance of anomaly
         if random.random() < 0.05:
             anomaly_sensor = random.choice(list(self.sensor_types.keys()))
-            sample[anomaly_sensor] *= random.uniform(1.5, 10)
+            # Apply significant deviation for anomaly
+            anomaly_factor = random.uniform(1.5, 10) * random.choice([-1, 1]) # Can be positive or negative anomaly
+            sample[anomaly_sensor] += anomaly_factor * self.sensor_types[anomaly_sensor]['variance'] * 10 # Scale anomaly by variance
+            # Ensure value stays within range even after anomaly
+            sensor_range = self.sensor_types[anomaly_sensor]['range']
+            sample[anomaly_sensor] = max(sensor_range[0], min(sensor_range[1], sample[anomaly_sensor]))
+            sample[anomaly_sensor] = round(sample[anomaly_sensor], 2) # Keep precision
             sample['anomaly_flag'] = True
-        
+
         return sample
-    
-    def generate_recording(self, user_id, recording_id, duration_minutes):
-        """Generate a high-frequency recording"""
+
+    def generate_and_write_recording(self, filename, duration_minutes):
+        """Generate a high-frequency recording and write directly to CSV"""
         duration_seconds = duration_minutes * 60
         num_samples = duration_seconds * 100  # 100Hz sample rate
-        
+
         start_time = datetime.now() - timedelta(days=random.randint(0, 30))
-        samples = []
         previous_values = None
-        
-        print(f"Generating {num_samples:,} samples for recording {recording_id}...")
-        
-        for i in tqdm(range(num_samples)):
-            current_time = start_time + timedelta(seconds=i/100)
-            sample = self.generate_sample(current_time, previous_values)
-            samples.append(sample)
-            previous_values = sample
-        
-        return {
-            "metadata": {
-                "userId": user_id,
-                "recordingId": recording_id,
-                "name": f"HF Recording {recording_id}",
-                "startTime": start_time.isoformat(),
-                "durationMinutes": duration_minutes,
-                "sampleRateHz": 100,
-                "deviceId": f"DEV_{random.randint(1000, 9999)}",
-                "tags": {
-                    "location": random.choice(["lab", "field", "factory"]),
-                    "environment": random.choice(["controlled", "harsh", "outdoor"])
-                }
-            },
-            "samples": samples
-        }
-    
-    def generate_dataset(self, num_users, recordings_per_user):
-        """Generate a complete high-frequency dataset"""
-        dataset = []
-        
-        for user_idx in range(num_users):
-            user_id = f"user_{user_idx:04d}"
-            
-            for rec_idx in range(recordings_per_user):
-                recording_id = f"rec_{user_idx:04d}_{rec_idx:04d}"
-                duration = random.choice([5, 15, 30, 60, 90, 150])  # minutes
-                
-                recording = self.generate_recording(
-                    user_id=user_id,
-                    recording_id=recording_id,
-                    duration_minutes=duration
-                )
-                
-                dataset.append(recording)
-        
-        return dataset
+
+        # Define CSV header based on sensor types + timestamp + anomaly flag
+        header = ['timestamp'] + list(self.sensor_types.keys()) + ['anomaly_flag']
+
+        print(f"Generating {num_samples:,} samples for {os.path.basename(filename)}...")
+
+        with open(filename, 'w', newline='') as csvfile:
+            writer = csv.writer(csvfile)
+            writer.writerow(header) # Write header
+
+            for i in tqdm(range(num_samples)):
+                current_time = start_time + timedelta(seconds=i/100)
+                sample = self.generate_sample(current_time, previous_values)
+
+                # Prepare row data in the order of the header
+                row = [sample['timestamp']]
+                for sensor_key in self.sensor_types.keys():
+                    row.append(sample.get(sensor_key, '')) # Use get for safety, though generate_sample should provide all
+                row.append(sample.get('anomaly_flag', False)) # Add anomaly flag
+
+                writer.writerow(row)
+                previous_values = sample # Update previous values for next iteration
+
 
 # Usage example
 if __name__ == "__main__":
     generator = HighFrequencyDataGenerator()
-    
-    print("Generating high-frequency benchmark dataset...")
+
+    print("Generating high-frequency benchmark dataset (CSV format)...")
     start_time = time.time()
-    
-    # Adjust these parameters based on your needs
-    dataset = generator.generate_dataset(
-        num_users=50,               # Number of unique users
-        recordings_per_user=10      # Recordings per user
-    )
-    
-    # Save recordings to individual files
-    print("\nSaving recordings...")
-    for i, recording in enumerate(tqdm(dataset)):
-        filename = f"hf_data/recording_{recording['metadata']['recordingId']}.json"
-        with open(filename, "w") as f:
-            json.dump(recording, f)
-    
-    print(f"\nDone! Generated {len(dataset)} recordings in {time.time()-start_time:.2f} seconds")
-    print("Files saved in 'hf_data' directory.")
+
+    # --- Configuration ---
+    NUM_USERS = 50               # Number of unique users
+    RECORDINGS_PER_USER = 10     # Recordings per user
+    OUTPUT_DIR = "hf_data_csv"   # Directory for CSV files
+    # ---------------------
+
+    # Create output directory if it doesn't exist
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    print(f"Output directory: '{OUTPUT_DIR}'")
+
+    total_recordings = 0
+    for user_idx in range(NUM_USERS):
+        user_id = f"user_{user_idx:04d}"
+        print(f"\nGenerating recordings for {user_id}...")
+
+        for rec_idx in range(RECORDINGS_PER_USER):
+            recording_id = f"rec_{user_idx:04d}_{rec_idx:04d}"
+            duration = random.choice([5, 15, 30, 60, 90, 150])  # minutes
+            filename = os.path.join(OUTPUT_DIR, f"recording_{recording_id}.csv")
+
+            generator.generate_and_write_recording(
+                filename=filename,
+                duration_minutes=duration
+            )
+            total_recordings += 1
+
+    end_time = time.time()
+    print(f"\n--- Generation Complete ---")
+    print(f"Generated {total_recordings} recordings.")
+    print(f"Total time: {end_time - start_time:.2f} seconds")
+    print(f"CSV files saved in '{OUTPUT_DIR}' directory.")
