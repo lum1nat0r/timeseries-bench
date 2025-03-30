@@ -1,7 +1,6 @@
 import yaml
 import pandas as pd
 import time
-import os
 import importlib
 import csv
 import random
@@ -10,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 
 # Assuming db_interface and handlers are in the same directory or accessible via PYTHONPATH
-from db_interface import DatabaseInterface
+from python.db_interface import DatabaseInterface # Changed to relative import
 # Import specific handlers dynamically later
 
 # --- Configuration Loading ---
@@ -47,7 +46,7 @@ def load_config(config_path: str = '../config.yaml') -> Dict[str, Any]:
 def get_db_handler(db_type: str) -> Type[DatabaseInterface]:
     """Dynamically imports and returns the appropriate DB handler class."""
     try:
-        module_name = f"db_{db_type}"
+        module_name = f"python.db_{db_type}"
         # Capitalize convention for class name (e.g., influxdb -> InfluxDBHandler)
         class_name = f"{db_type.capitalize()}Handler"
         # Import the module

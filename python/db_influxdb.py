@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 from influxdb_client import InfluxDBClient, Point, WriteOptions
 from influxdb_client.client.write_api import SYNCHRONOUS
 from influxdb_client.client.delete_api import DeleteApi
@@ -7,7 +8,7 @@ from typing import Dict, Any, Optional, List
 
 from .db_interface import DatabaseInterface
 
-class InfluxDBHandler(DatabaseInterface):
+class InfluxdbHandler(DatabaseInterface):
     """InfluxDB implementation of the DatabaseInterface."""
 
     def __init__(self):

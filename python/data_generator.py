@@ -110,7 +110,7 @@ if __name__ == "__main__":
     start_time = time.time()
 
     # --- Configuration ---
-    NUM_USERS = 50               # Number of unique users
+    NUM_USERS = 5               # Number of unique users
     RECORDINGS_PER_USER = 10     # Recordings per user
     OUTPUT_DIR = "hf_data_csv"   # Directory for CSV files
     # ---------------------

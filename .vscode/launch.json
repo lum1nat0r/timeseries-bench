@@ -1,0 +1,16 @@
+{
+  // Use IntelliSense to learn about possible attributes.
+  // Hover to view descriptions of existing attributes.
+  // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Python: Benchmark Module", // Name displayed in VS Code Run/Debug
+      "type": "debugpy",                  // Specifies the Python debugger
+      "request": "launch",               // Indicates launching the application
+      "module": "python.benchmark",      // Tells VS Code to run 'python -m python.benchmark'
+      "console": "integratedTerminal",   // Runs the output in the integrated terminal
+      "cwd": "${workspaceFolder}"        // Ensures the command runs from the project root directory
+    }
+  ]
+}
