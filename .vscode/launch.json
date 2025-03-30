@@ -19,7 +19,7 @@
       "module": "python.db_influxdb",
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}",
-      "args": ["python/hf_data_csv/recording_rec_0002_0002.csv"]
+      "args": ["python/hf_data_csv/recording_rec_0000_0007.csv"]
     }
   ]
 }

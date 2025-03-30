@@ -147,7 +147,14 @@ class InfluxdbHandler(DatabaseInterface):
              return # Avoid writing empty list
 
         try:
-            self.write_api.write(bucket=self.bucket, org=self.org, record=points)
+            # limit batch size to avoid large payloads (10k points is a recommended max)
+            batch_size = 10000
+            for i in range(0, len(points), batch_size):
+                batch = points[i:i + batch_size]
+                self.write_api.write(bucket=self.bucket, org=self.org, record=batch)
+                print(f"Wrote {len(batch)} points to InfluxDB.")
+        except Exception as e:
+            print(f"Error writing batch to InfluxDB: {e}")
         except ApiException as e:
             print(f"Error writing batch to InfluxDB: {e}")
             # Consider adding retry logic or specific error handling
