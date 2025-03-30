@@ -1,3 +1,6 @@
 faker
+influxdb-client>=1.39 # Specify a version or range if needed
 numpy
+pandas
+pyyaml
 tqdm

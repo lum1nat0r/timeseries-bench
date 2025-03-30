@@ -1,0 +1,65 @@
+# Configuration for the Timeseries Database Benchmark
+
+database:
+  type: influxdb # Options: influxdb, timescaledb, clickhouse, mongodb (add implementations in python/db_handlers/)
+  host: localhost # Replace with actual host or Kubernetes service name
+  port: 8086      # Default InfluxDB port
+  token: "YOUR_INFLUXDB_API_TOKEN" # Replace with your actual InfluxDB API token
+  org: "your-org" # Replace with your InfluxDB organization
+  bucket: "benchmark_bucket" # Desired InfluxDB bucket name
+  measurement: "sensor_data" # Desired InfluxDB measurement name
+
+benchmark_params:
+  batch_sizes: [100, 1000, 10000] # Number of rows per batch insert
+  num_individual_inserts: 100    # Number of single inserts to test
+  # Define specific queries to run
+  # Types: 'range', 'filtered', 'aggregate'
+  # Durations/Intervals use pandas offset aliases: https://pandas.pydata.org/pandas-docs/stable/user_guide/timeseries.html#offset-aliases
+  query_definitions:
+    - type: range
+      duration: '1h' # Query data within a 1-hour window
+      description: "Query 1 hour of data"
+    - type: range
+      duration: '6h'
+      description: "Query 6 hours of data"
+    - type: filtered
+      duration: '30m'
+      filter_field: "temperature"
+      filter_op: ">"
+      filter_value: 35.0
+      description: "Query 30 mins where temperature > 35°C"
+    - type: filtered
+      duration: '1h'
+      filter_field: "anomaly_flag"
+      filter_op: "=="
+      filter_value: True # Note: YAML boolean
+      description: "Query 1 hour for anomalies"
+    - type: aggregate
+      duration: '1h'
+      interval: '1m' # Aggregate interval
+      func: 'mean'   # Aggregation function (e.g., mean, max, min, count, sum)
+      field: 'temperature' # Field to aggregate
+      description: "1-minute mean temperature over 1 hour"
+    - type: aggregate
+      duration: '6h'
+      interval: '10m'
+      func: 'max'
+      field: 'humidity'
+      description: "10-minute max humidity over 6 hours"
+
+  # Define deletion scenarios
+  delete_params:
+    - type: range
+      duration: '1h' # Delete a 1-hour window of data
+      description: "Delete 1 hour of data"
+    - type: recording # Delete data for a specific recording_id
+      description: "Delete data for one recording"
+
+data_source:
+  directory: "python/hf_data_csv" # Directory containing the generated CSV files
+  num_files_to_use: 5 # Number of CSV files to use for the benchmark run
+  # Optional: Specify specific filenames if needed
+  # filenames: ["recording_rec_0000_0000.csv", "recording_rec_0000_0001.csv"]
+
+results:
+  output_file: "benchmark_results.csv" # File to save the benchmark results
