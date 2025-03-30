@@ -7,6 +7,7 @@ import random
 from typing import Dict, Any, List, Optional, Type
 from datetime import datetime
 from pathlib import Path
+from tqdm import tqdm
 
 # Assuming db_interface and handlers are in the same directory or accessible via PYTHONPATH
 from python.db_interface import DatabaseInterface # Changed to relative import
@@ -103,9 +104,9 @@ def load_data_files(config: Dict[str, Any]) -> List[Dict[str, Any]]:
     print(f"Attempting to load {len(files_to_load)} data file(s)...")
     loaded_count = 0
     skipped_count = 0
-    for file_path in files_to_load:
+    for file_path in tqdm(files_to_load, desc="Loading data files"):
         try:
-            print(f"  Loading {file_path.name}...")
+            # print(f"  Loading {file_path.name}...") # tqdm provides progress
             # Extract recording_id from filename (e.g., recording_rec_0000_0000.csv -> rec_0000_0000)
             recording_id = "_".join(file_path.stem.split('_')[1:]) # Assumes 'recording_' prefix
 
@@ -151,15 +152,17 @@ def run_insert_benchmarks(db_handler: DatabaseInterface, data: List[Dict[str, An
     print("\n--- Running Insert Benchmarks ---")
 
     # Batch Inserts
-    for batch_size in batch_sizes:
-        print(f"  Testing Batch Insert (Size: {batch_size})...")
+    for batch_size in tqdm(batch_sizes, desc="Batch Insert Sizes"):
+        # print(f"  Testing Batch Insert (Size: {batch_size})...") # tqdm provides progress
         total_time = 0
         rows_in_batch_run = 0
         start_overall = time.time()
 
-        for file_data in data:
+        # Add a nested tqdm for files within each batch size test
+        for file_data in tqdm(data, desc=f"  Files (Batch {batch_size})", leave=False):
             df = file_data['dataframe']
             recording_id = file_data['recording_id']
+            # This inner loop might be too granular for tqdm, let's skip it for now.
             for i in range(0, len(df), batch_size):
                 batch_df = df.iloc[i:i + batch_size]
                 if batch_df.empty: continue
@@ -208,7 +211,7 @@ def run_insert_benchmarks(db_handler: DatabaseInterface, data: List[Dict[str, An
     else:
         start_overall_ind = time.time()
         inserted_count = 0
-        for row_info in rows_to_insert:
+        for row_info in tqdm(rows_to_insert, desc="Individual Inserts"):
             start_ind = time.time()
             try:
                 db_handler.insert_individual(row_info['timestamp'], row_info['data'], row_info['recording_id'])
@@ -253,8 +256,8 @@ def run_query_benchmarks(db_handler: DatabaseInterface, data: List[Dict[str, Any
     ref_recording_id = ref_file['recording_id']
     print(f"  Using reference recording '{ref_recording_id}' (Time range: {ref_start} to {ref_end}) for queries.")
 
-    for i, q_def in enumerate(query_defs):
-        print(f"  Running Query {i+1}: {q_def.get('description', q_def['type'])}")
+    for q_def in tqdm(query_defs, desc="Running Queries"):
+        # print(f"  Running Query {i+1}: {q_def.get('description', q_def['type'])}") # tqdm provides progress
         q_type = q_def['type']
         latency = -1.0
         rows_returned = -1
@@ -342,8 +345,8 @@ def run_delete_benchmarks(db_handler: DatabaseInterface, data: List[Dict[str, An
     print(f"  Using recording '{delete_recording_id}' for full recording delete.")
 
 
-    for i, d_def in enumerate(delete_defs):
-        print(f"  Running Delete Op {i+1}: {d_def.get('description', d_def['type'])}")
+    for d_def in tqdm(delete_defs, desc="Running Deletes"):
+        # print(f"  Running Delete Op {i+1}: {d_def.get('description', d_def['type'])}") # tqdm provides progress
         d_type = d_def['type']
         latency = -1.0
         delete_params = d_def.copy()

@@ -5,6 +5,11 @@ from influxdb_client.client.write_api import SYNCHRONOUS
 from influxdb_client.client.delete_api import DeleteApi
 from influxdb_client.rest import ApiException
 from typing import Dict, Any, Optional, List
+import os
+import sys
+import yaml
+import argparse
+import time # For basic verification delay
 
 from .db_interface import DatabaseInterface
 
@@ -105,30 +110,41 @@ class InfluxdbHandler(DatabaseInterface):
         if not self.write_api or not self.bucket or not self.measurement:
             raise ConnectionError("InfluxDB write API not initialized.")
 
+        # Optimized point creation using list comprehension
         points = []
-        for index, row in data_batch_df.iterrows():
+        # Convert timestamp column to datetime objects upfront if not already
+        if not pd.api.types.is_datetime64_any_dtype(data_batch_df['timestamp']):
+             data_batch_df['timestamp'] = pd.to_datetime(data_batch_df['timestamp'])
+
+        # Prepare columns excluding timestamp
+        field_columns = [col for col in data_batch_df.columns if col != 'timestamp']
+
+        # Iterate over rows using df.itertuples() which is faster than iterrows()
+        # or convert to records list for potentially even faster access
+        records = data_batch_df.to_dict('records') # Convert DF to list of dicts
+
+        for record in records:
             point = Point(self.measurement)
             point.tag("recording_id", recording_id)
-            # Ensure timestamp is timezone-aware or handle appropriately
-            ts = pd.to_datetime(row['timestamp'])
-            point.time(ts, write_precision='ns')
+            point.time(record['timestamp'], write_precision='ns')
 
-            for col_name in data_batch_df.columns:
-                if col_name == 'timestamp': continue
-                value = row[col_name]
-                # Handle potential NaN values if necessary
+            for col in field_columns:
+                value = record[col]
                 if pd.isna(value):
-                    continue # Skip NaN fields or handle as needed
+                    continue # Skip NaN fields
 
                 # Type casting
                 if isinstance(value, (int, float, np.number)):
-                     point.field(col_name, float(value))
+                    point.field(col, float(value))
                 elif isinstance(value, bool):
-                     point.field(col_name, value)
+                    point.field(col, value)
                 else:
-                     point.field(col_name, str(value))
-
+                    point.field(col, str(value))
             points.append(point)
+
+        if not points:
+             print("Warning: No points generated for batch insert.")
+             return # Avoid writing empty list
 
         try:
             self.write_api.write(bucket=self.bucket, org=self.org, record=points)
@@ -312,95 +328,162 @@ class InfluxdbHandler(DatabaseInterface):
             "measurement": self.measurement
         }
 
-# Example usage (for testing purposes, typically run from benchmark.py)
+    def test_insert_csv(self, csv_file_path: str, drop_existing_bucket: bool = False) -> None:
+        """
+        Reads a CSV file, extracts recording_id, and inserts data into InfluxDB.
+        Includes basic verification.
+        """
+        if not self.client or not self.bucket or not self.org or not self.measurement:
+            raise ConnectionError("Not connected to InfluxDB.")
+
+        print(f"\n--- Testing CSV Insertion: {csv_file_path} ---")
+
+        # 1. Optionally drop and recreate the bucket
+        if drop_existing_bucket:
+            print("Attempting to drop and recreate bucket...")
+            self.setup_schema(drop_existing=True)
+            # Short delay to ensure bucket operations complete if needed
+            time.sleep(1)
+        else:
+            # Ensure bucket exists without dropping
+            self.setup_schema(drop_existing=False)
+
+
+        # 2. Read CSV file
+        try:
+            print(f"Reading CSV file: {csv_file_path}")
+            data_df = pd.read_csv(csv_file_path)
+            if 'timestamp' not in data_df.columns:
+                 raise ValueError("CSV file must contain a 'timestamp' column.")
+            print(f"Successfully read {len(data_df)} rows from CSV.")
+        except FileNotFoundError:
+            print(f"Error: CSV file not found at {csv_file_path}")
+            return
+        except Exception as e:
+            print(f"Error reading CSV file {csv_file_path}: {e}")
+            return
+
+        # 3. Extract recording_id from filename (e.g., recording_rec_0000_0001.csv -> rec_0000_0001)
+        try:
+            base_name = os.path.basename(csv_file_path)
+            # Assuming format like 'prefix_rec_id_part1_id_part2.csv'
+            parts = base_name.split('.')[0].split('_')
+            if len(parts) >= 3 and parts[1] == 'rec':
+                 recording_id = "_".join(parts[1:]) # e.g., rec_0000_0001
+            else:
+                 # Fallback or default if pattern doesn't match
+                 recording_id = base_name.split('.')[0]
+                 print(f"Warning: Could not extract standard recording_id from filename '{base_name}'. Using '{recording_id}'.")
+            print(f"Extracted recording_id: {recording_id}")
+        except Exception as e:
+            print(f"Error extracting recording_id from filename {csv_file_path}: {e}")
+            recording_id = "unknown_recording" # Default fallback
+            print(f"Using default recording_id: {recording_id}")
+
+
+        # 4. Insert data using existing insert_batch method
+        try:
+            print(f"Inserting batch for recording_id '{recording_id}'...")
+            start_insert_time = time.time()
+            self.insert_batch(data_df, recording_id)
+            end_insert_time = time.time()
+            print(f"Batch insertion completed in {end_insert_time - start_insert_time:.2f} seconds.")
+        except Exception as e:
+            print(f"Error during batch insertion for {csv_file_path}: {e}")
+            return # Stop if insertion fails
+
+        # 5. Basic Verification (Optional but recommended)
+        print("Performing basic verification...")
+        time.sleep(2) # Allow some time for data to become queryable
+
+        try:
+            # Derive time range from data for verification query
+            if not pd.api.types.is_datetime64_any_dtype(data_df['timestamp']):
+                 data_df['timestamp'] = pd.to_datetime(data_df['timestamp'])
+            min_ts = data_df['timestamp'].min()
+            max_ts = data_df['timestamp'].max()
+
+            # Query to count points for this recording_id in the data's time range
+            start_iso = min_ts.isoformat() + "Z"
+            end_iso = (max_ts + pd.Timedelta(seconds=1)).isoformat() + "Z" # Add buffer to end time
+
+            count_query = f'''
+                from(bucket: "{self.bucket}")
+                  |> range(start: {start_iso}, stop: {end_iso})
+                  |> filter(fn: (r) => r["_measurement"] == "{self.measurement}")
+                  |> filter(fn: (r) => r["recording_id"] == "{recording_id}")
+                  |> count()
+            '''
+            print(f"Executing verification query for recording '{recording_id}' between {start_iso} and {end_iso}")
+            count_df = self._execute_flux_query(count_query)
+
+            if count_df is not None and not count_df.empty:
+                inserted_count = count_df['value'].iloc[0]
+                print(f"Verification: Found {inserted_count} points in InfluxDB for recording_id '{recording_id}'. Expected ~{len(data_df)}.")
+                if inserted_count == len(data_df):
+                    print("Verification successful: Row count matches.")
+                else:
+                    print("Verification warning: Row count mismatch.")
+            elif count_df is not None and count_df.empty:
+                 print("Verification warning: No points found in the query range for this recording.")
+            else:
+                print("Verification failed: Could not retrieve count from InfluxDB.")
+
+        except Exception as e:
+            print(f"Error during verification query: {e}")
+
+        print(f"--- CSV Insertion Test Finished: {csv_file_path} ---")
+
+
+# Command-line interface for CSV insertion testing
 if __name__ == '__main__':
-    # This block is for basic testing of the handler
-    # You would need a running InfluxDB instance and a valid token/org/bucket
-    import yaml
-    import os
+    # Set up command-line argument parsing
+    parser = argparse.ArgumentParser(description='Test CSV file insertion into InfluxDB')
+    parser.add_argument('csv_file', help='Path to the CSV file to insert')
+    parser.add_argument('--drop', action='store_true', help='Drop and recreate the bucket before insertion')
+    parser.add_argument('--config', default=None, help='Path to config.yaml file (default: ../config.yaml)')
+    args = parser.parse_args()
 
-    # Load config relative to this file's location if run directly
+    # Determine config path
     script_dir = os.path.dirname(__file__)
-    config_path = os.path.join(script_dir, '..', 'config.yaml') # Assumes config.yaml is in parent dir
-
+    config_path = args.config if args.config else os.path.join(script_dir, '..', 'config.yaml')
+    
     try:
+        print(f"Loading configuration from {config_path}")
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)['database']
 
-        # !!! Replace placeholders in config.yaml before running !!!
-        if 'YOUR_INFLUXDB_API_TOKEN' in config['token'] or 'your-org' in config['org']:
-             print("Please replace placeholder values in config.yaml (token, org) before running this test.")
-        else:
-            handler = InfluxDBHandler()
-            try:
-                handler.connect(config)
-                handler.setup_schema(drop_existing=True)
+        # Validate configuration
+        if 'YOUR_INFLUXDB_API_TOKEN' in config.get('token', '') or 'your-org' in config.get('org', ''):
+            print("Error: Please replace placeholder values in config.yaml (token, org) before running this test.")
+            sys.exit(1)
 
-                # --- Test Insertions ---
-                print("\n--- Testing Insertions ---")
-                test_time = pd.Timestamp.now(tz='UTC')
-                test_data_single = {'temperature': 25.5, 'humidity': 55.1, 'anomaly_flag': False}
-                handler.insert_individual(test_time, test_data_single, "test_rec_001")
-                print("Inserted single point.")
-
-                test_batch_data = {
-                    'timestamp': [test_time + pd.Timedelta(seconds=i) for i in range(3)],
-                    'temperature': [26.0, 26.1, 26.2],
-                    'humidity': [56.0, 56.5, 57.0],
-                    'anomaly_flag': [False, True, False]
-                }
-                test_batch_df = pd.DataFrame(test_batch_data)
-                handler.insert_batch(test_batch_df, "test_rec_001")
-                print(f"Inserted batch of {len(test_batch_df)} points.")
-
-                # Allow time for data to be processed if necessary
-                import time
-                time.sleep(2)
-
-                # --- Test Queries ---
-                print("\n--- Testing Queries ---")
-                start_q = test_time - pd.Timedelta(minutes=1)
-                end_q = test_time + pd.Timedelta(minutes=1)
-
-                print(f"\nQuery Time Range ({start_q} to {end_q}):")
-                df_range = handler.query_time_range(start_q, end_q, "test_rec_001")
-                print(df_range)
-
-                print("\nQuery Filtered (humidity > 56.2):")
-                filter_cond = {'field': 'humidity', 'op': '>', 'value': 56.2}
-                df_filtered = handler.query_filtered(start_q, end_q, "test_rec_001", filter_cond)
-                print(df_filtered)
-
-                print("\nQuery Aggregate (mean temperature per 1s):")
-                df_agg = handler.query_aggregate(start_q, end_q, "test_rec_001", '1s', 'mean', 'temperature')
-                print(df_agg)
-
-                # --- Test Deletions ---
-                print("\n--- Testing Deletions ---")
-                del_start = test_time + pd.Timedelta(seconds=0.5)
-                del_end = test_time + pd.Timedelta(seconds=1.5)
-                handler.delete_time_range(del_start, del_end, "test_rec_001")
-                # Verify deletion
-                print("\nQuery after partial deletion:")
-                df_after_del = handler.query_time_range(start_q, end_q, "test_rec_001")
-                print(df_after_del)
-
-                handler.delete_recording("test_rec_001")
-                 # Verify deletion
-                print("\nQuery after full recording deletion:")
-                df_after_full_del = handler.query_time_range(start_q, end_q, "test_rec_001")
-                print(df_after_full_del)
-
-
-            except ConnectionError as e:
-                print(f"Connection failed: {e}")
-            except Exception as e:
-                print(f"An error occurred during testing: {e}")
-            finally:
-                if handler and handler.client:
-                    handler.close()
+        # Initialize handler and connect to InfluxDB
+        print("Initializing InfluxDB handler...")
+        handler = InfluxdbHandler()
+        
+        try:
+            # Connect to InfluxDB
+            print(f"Connecting to InfluxDB at {config.get('host', 'localhost')}:{config.get('port', '8086')}...")
+            handler.connect(config)
+            
+            # Test CSV insertion
+            handler.test_insert_csv(args.csv_file, drop_existing_bucket=args.drop)
+            
+        except ConnectionError as e:
+            print(f"Connection failed: {e}")
+            sys.exit(1)
+        except Exception as e:
+            print(f"An error occurred during testing: {e}")
+            sys.exit(1)
+        finally:
+            # Close connection
+            if handler and handler.client:
+                handler.close()
 
     except FileNotFoundError:
         print(f"Error: config.yaml not found at {config_path}")
+        sys.exit(1)
     except Exception as e:
         print(f"Error loading or parsing config.yaml: {e}")
+        sys.exit(1)

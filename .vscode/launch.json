@@ -11,6 +11,15 @@
       "module": "python.benchmark",      // Tells VS Code to run 'python -m python.benchmark'
       "console": "integratedTerminal",   // Runs the output in the integrated terminal
       "cwd": "${workspaceFolder}"        // Ensures the command runs from the project root directory
+    },
+    {
+      "name": "Python: Test InfluxDB",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "python.db_influxdb",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}",
+      "args": ["python/hf_data_csv/recording_rec_0002_0002.csv"]
     }
   ]
 }
